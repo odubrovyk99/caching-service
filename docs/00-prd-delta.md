@@ -4,7 +4,7 @@
 **Date:** 2026-10-01
 **Author:** @odubrovyk
 **Phase:** PRD
-**Status:** Draft — pending review
+**Status:** Implemented
 **Source brief:** [Python Backend: Caching Service](https://dune-dinner-167.notion.site/Python-Backend-Caching-Service-1832fabcbb3f808f8627c77eb978bae4)
 
 ---

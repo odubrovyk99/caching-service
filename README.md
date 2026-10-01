@@ -80,4 +80,6 @@ The same commands via [lets](https://lets-cli.org/):
   transformer once. `ON CONFLICT DO NOTHING` keeps one row. No cross-request locking.
 - Empty lists, non-string items, NUL characters and broken Unicode characters are rejected with `422`.
 - Limits: 1–1000 items per list, ≤ 10 000 characters per item.
+- The brief's sample JSON uses typographic quotes (`“ ”`), which is not valid JSON. It is read as plain
+  `"` quotes; the brief's sample output is reproduced exactly.
 - Payload identity is order-sensitive. The input lists are not stored, only the output.

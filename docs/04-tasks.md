@@ -3668,6 +3668,8 @@ services:
     ports:
       - "8000:8000"
     depends_on:
+      postgres:
+        condition: service_healthy
       migrations:
         condition: service_completed_successfully
     healthcheck:

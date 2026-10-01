@@ -2,7 +2,7 @@
 
 - **Author(s)**: @odubrovyk
 - **Created**: 2026-10-01
-- **Status**: Draft
+- **Status**: Implemented
 - **Scope**: new repo `caching-service` (FastAPI app + `cache-cli`). No existing service touched.
 - **PRD**: `docs/00-prd-delta.md` · **Spec**: `docs/02-spec.yaml` · **Tests**: `docs/03-test-checklist.md` ·
   **Plan**: `docs/04-tasks.md`
@@ -269,8 +269,8 @@ Full schemas are in `02-spec.yaml`.
 - Greenfield. Alembic revision `0001_create_transformation_and_payload` creates both tables and indexes.
   Its `downgrade()` drops them, so it is fully reversible (and holds no data worth keeping before launch).
 - In compose, the `migrations` service runs `alembic upgrade head` once. `caching-service` depends on it
-  with `condition: service_completed_successfully`, and `migrations` waits for `postgres` to be
-  `service_healthy`.
+  with `condition: service_completed_successfully` and on `postgres` being `service_healthy`, and
+  `migrations` also waits for `postgres` to be `service_healthy`.
 - No rolling-deploy compatibility concerns: there is one schema version and no consumers.
 
 ---
