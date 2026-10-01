@@ -1,0 +1,360 @@
+spec_id: caching-service
+title: Caching Service — Payload Generation with a Postgres-Backed Transformer Cache
+rfc_ref: docs/01-RFC.md
+prd_ref: docs/00-prd-delta.md
+test_checklist_ref: docs/03-test-checklist.md
+tasks_ref: docs/04-tasks.md
+source_brief: https://dune-dinner-167.notion.site/Python-Backend-Caching-Service-1832fabcbb3f808f8627c77eb978bae4
+
+decisions:
+  - id: D-1
+    date: 2026-10-01
+    decision: Cache store is PostgreSQL only. No Redis, no in-process LRU.
+  - id: D-2
+    date: 2026-10-01
+    decision: Transformer is plain str.upper() with no simulated latency, behind the TransformerClient protocol.
+  - id: D-3
+    date: 2026-10-01
+    decision: >
+      Strings are de-duplicated inside each request, and payload ids are reused for identical input. Concurrent
+      first-sight of a string may call the transformer once per racing request. This is accepted; there is
+      no cross-request locking.
+  - id: D-4
+    date: 2026-10-01
+    decision: CLI `-h` means `--host`. Help is `--help` only (the brief lists `-h` for both).
+  - id: D-5
+    date: 2026-10-01
+    decision: >
+      Stdlib `logging` only; all dependencies from public PyPI; no build secrets or credentials.
+
+services:
+  - name: caching-service
+    role: >
+      New FastAPI service plus the `cache-cli` console script, both shipped from one repo and one
+      distribution. Owns Postgres tables `transformation` and `payload`.
+
+constants:
+  MAX_LIST_LENGTH: 1000
+  MAX_STRING_LENGTH: 10000          # code points, per item
+  OUTPUT_SEPARATOR: ", "
+  PAYLOAD_CREATED_MESSAGE: "Payload created"
+  PAYLOAD_EXISTS_MESSAGE: "Payload already exists"
+  PAYLOAD_NOT_FOUND_DETAIL: "Payload not found"
+
+algorithms:
+  transformation_key: sha256(value.encode("utf-8")).hexdigest()   # 64 lowercase hex chars
+  payload_key: >
+    sha256(json.dumps([list_1, list_2], ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+  output: >
+    OUTPUT_SEPARATOR.join(interleave([T(x) for x in list_1], [T(y) for y in list_2])), where
+    interleave(a, b) = [a[0], b[0], a[1], b[1], ...] and T is the cached transformer result.
+
+acceptance_criteria:
+  # ---- POST /payload: creation and validation ----
+  - id: AC-1
+    description: A valid request creates a payload and returns 201 with a UUID id and the created message.
+    given_when_then: >
+      Given an empty database, when POST /payload with list_1=["a","b"] and list_2=["c","d"],
+      then the status is 201, the body is {"id": <UUIDv4 string>, "message": "Payload created"},
+      and exactly one `payload` row exists with that id.
+  - id: AC-2
+    description: The brief's sample input produces the exact sample output.
+    given_when_then: >
+      Given list_1=["first string","second string","third string"] and
+      list_2=["other string","another string","last string"], when POST then GET /payload/{id},
+      then output == "FIRST STRING, OTHER STRING, SECOND STRING, ANOTHER STRING, THIRD STRING, LAST STRING".
+  - id: AC-3
+    description: Lists of different length are rejected before any work is done.
+    given_when_then: >
+      When POST with list_1 of length 2 and list_2 of length 3, then the status is 422 and the response detail
+      contains "list_1 and list_2 must have the same length"; the transformer is called 0 times; and no row is
+      written to `transformation` or `payload`.
+  - id: AC-4
+    description: Empty lists are rejected.
+    given_when_then: When POST with list_1=[] and list_2=[], then the status is 422 and no rows are written.
+  - id: AC-5
+    description: Non-string items are rejected and never coerced.
+    given_when_then: >
+      When an item of list_1 is 123, null, true, or {"x":1}, then the status is 422. (StrictStr: 123 is not
+      coerced to "123".)
+  - id: AC-6
+    description: Missing keys, extra keys, or a non-object body are rejected.
+    given_when_then: >
+      When the body lacks list_2, or has an extra key "list_3", or is a JSON array, then the status is 422.
+  - id: AC-7
+    description: Size limits are enforced.
+    given_when_then: >
+      When either list has 1001 items, or any item has 10001 code points, then the status is 422. Lists of
+      exactly 1000 items, and items of exactly 10000 code points, are accepted.
+  - id: AC-8
+    description: Strings Postgres cannot store are rejected with 422, never a 500.
+    given_when_then: >
+      When any item contains U+0000, or a lone surrogate such as the JSON escape "\ud800", then the status
+      is 422 and no rows are written.
+  - id: AC-9
+    description: Empty-string items are valid and transform to empty strings.
+    given_when_then: >
+      When POST list_1=[""] and list_2=["a"], then the status is 201 and GET returns output ", A".
+
+  # ---- Reuse and caching ----
+  - id: AC-10
+    description: Repeated identical input returns the same id with no transformer calls and no new rows.
+    given_when_then: >
+      Given a payload already created from input X, when POST X again, then the status is 200, the body is
+      {"id": <same id>, "message": "Payload already exists"}, the transformer call count is unchanged, and
+      row counts in `transformation` and `payload` are unchanged.
+  - id: AC-11
+    description: Identity is order-sensitive.
+    given_when_then: >
+      Given POST (list_1=A, list_2=B) returned id1, when POST (list_1=B, list_2=A), then the status is 201 and
+      the returned id is not id1. Likewise when the items inside one list are reordered.
+  - id: AC-12
+    description: A string transformed by an earlier request is never transformed again.
+    given_when_then: >
+      Given POST list_1=["a","b"], list_2=["c","d"] (4 calls), when POST list_1=["a","x"], list_2=["c","y"],
+      then the transformer is called exactly for "x" and "y" (2 calls), and the output is "A, C, X, Y".
+  - id: AC-13
+    description: Duplicate strings within one request are transformed at most once.
+    given_when_then: >
+      Given an empty cache, when POST list_1=["a","a"], list_2=["a","b"], then the transformer is called
+      exactly 2 times (once for "a", once for "b"), and the output is "A, A, A, B".
+  - id: AC-14
+    description: A cached empty-string output counts as a hit.
+    given_when_then: >
+      Given "" was already transformed and cached, when a new payload contains "", then "" is not sent to the
+      transformer again. (Guards against `if not cached_output` treating "" as a miss.)
+  - id: AC-15
+    description: Concurrent identical POSTs converge on one payload.
+    given_when_then: >
+      When 5 identical POSTs run concurrently on an empty database, then every response is 201 or 200, all
+      5 ids are equal, and exactly one `payload` row exists.
+  - id: AC-16
+    description: Concurrent inserts of the same transformation do not error and keep one row.
+    given_when_then: >
+      Given two sessions that both insert a transformation with the same input_hash, when both commit, then
+      neither raises and exactly one `transformation` row exists for that hash.
+  - id: AC-39
+    description: Concurrent requests that share strings in opposite order do not deadlock.
+    given_when_then: >
+      When two POSTs run concurrently, one with 100 new strings in order v0..v99 and one with the same
+      strings reversed, then both return 201. Repeated over 10 rounds of fresh strings, no response is 500.
+      (Pins the input_hash ordering of the batched transformation insert.)
+  - id: AC-17
+    description: Long strings beyond the btree entry limit are cached correctly.
+    given_when_then: >
+      When POST includes a 10000-code-point string, then the status is 201 and the GET output contains its
+      uppercase form. (A unique index on raw text would fail here; the sha256 key does not.)
+  - id: AC-18
+    description: Unicode is transformed with Python str.upper semantics and round-trips intact.
+    given_when_then: >
+      When POST list_1=["straße"], list_2=["héllo 👋"], then GET output == "STRASSE, HÉLLO 👋".
+
+  # ---- GET /payload/{id} ----
+  - id: AC-19
+    description: Reading an existing payload returns its output.
+    given_when_then: When GET /payload/{id} for an existing id, then the status is 200 and the body is exactly {"output":"..."}.
+  - id: AC-20
+    description: Unknown id returns 404.
+    given_when_then: >
+      When GET /payload/{random uuid4} that does not exist, then the status is 404 and the body is
+      {"detail":"Payload not found"}.
+  - id: AC-21
+    description: Malformed id returns 422 without a DB query.
+    given_when_then: When GET /payload/not-a-uuid, then the status is 422.
+
+  # ---- Transactions / wiring ----
+  - id: AC-22
+    description: Commit happens before the response is sent.
+    given_when_then: >
+      Given a session whose commit() raises, when POST a valid new payload, then the client receives 500,
+      not 201. (Pins Depends(get_session, scope="function").)
+  - id: AC-23
+    description: Bounded DB statements per POST, independent of list size.
+    given_when_then: >
+      When POST a new payload of 1000+1000 distinct items, then at most 5 SQL statements execute. When the
+      same input is POSTed again, exactly 1 SQL statement executes.
+  - id: AC-24
+    description: The health endpoint reports liveness.
+    given_when_then: When GET /health, then the status is 200 and the body is {"status":"ok"}.
+  - id: AC-25
+    description: The real lifespan wiring works end-to-end.
+    given_when_then: >
+      Given CACHING_SERVICE_DATABASE_URL points at a migrated Postgres, when the app starts through its
+      lifespan (no dependency overrides) and POST then GET run, then both succeed.
+
+  # ---- cache-cli ----
+  - id: AC-26
+    description: Inline JSON input, single iteration, stdout.
+    given_when_then: >
+      When `cache-cli -h <url> -j '{"list_1":["a"],"list_2":["b"]}'`, then the exit code is 0 and stdout has
+      exactly one line, a JSON object with keys iteration=1, id=<uuid>, created=<bool>, output="A, B".
+  - id: AC-27
+    description: File and stdin input.
+    given_when_then: >
+      When `-i path/to/input.json`, the file is read as UTF-8. When `-i -`, stdin is read. Both produce the
+      same output line as the equivalent `-j`.
+  - id: AC-28
+    description: Repeat runs N POST+GET iterations.
+    given_when_then: >
+      When `-r 3` with input new to the server, then there are 3 lines with iteration 1,2,3, all with the same
+      id, and created is [true,false,false].
+  - id: AC-29
+    description: Output to a file.
+    given_when_then: >
+      When `-o out.jsonl`, then nothing is written to stdout and out.jsonl holds the lines. `-o -` (the
+      default) writes to stdout.
+  - id: AC-30
+    description: Exactly one input source is required.
+    given_when_then: >
+      When both -i and -j are given, or neither, then the exit code is 2, stderr names the problem, and no
+      HTTP request is made.
+  - id: AC-31
+    description: Invalid argument values are rejected.
+    given_when_then: >
+      When -r is 0, -1 or "abc", or -h is "localhost:8000" or "ftp://x", then the exit code is 2 and no HTTP
+      request is made.
+  - id: AC-32
+    description: -h is host; --help prints help.
+    given_when_then: >
+      When `-h http://example:9000 -j ...`, then the requests go to example:9000. When `--help`, then the
+      exit code is 0, and stdout contains "--host", "--repeat", "--input", "--json", "--output".
+  - id: AC-33
+    description: Input is validated client-side with the server's rules before any network call.
+    given_when_then: >
+      When the input is not valid JSON, or has unequal list lengths, or a missing input file, then the exit
+      code is 2 and no HTTP request is made.
+  - id: AC-34
+    description: Network and server failures exit 1.
+    given_when_then: >
+      When the server is unreachable, or answers a non-2xx status, then the exit code is 1, stderr contains
+      "request failed", and lines from iterations that already completed remain in the output.
+  - id: AC-35
+    description: The CLI ignores environment variables.
+    given_when_then: >
+      Given env HOST=http://evil:1 and REPEAT=5, when `cache-cli -j ...` runs without -h or -r, then
+      host == http://localhost:8000/ and repeat == 1.
+  - id: AC-36
+    description: An unwritable output path fails before any request.
+    given_when_then: >
+      When `-o /nonexistent-dir/out.jsonl`, then the exit code is 2 and no HTTP request is made.
+
+  # ---- Deployment ----
+  - id: AC-37
+    description: One-command local stack.
+    given_when_then: >
+      Given a clean checkout and no credentials of any kind, when `docker compose up --build`, then
+      `migrations` exits 0 and `caching-service` GET /health returns 200 within 30 s.
+  - id: AC-38
+    description: The migration is reversible.
+    given_when_then: >
+      When `alembic downgrade base`, then both tables are gone, and `alembic upgrade head` recreates them with
+      the unique indexes idx_transformation__input_hash and idx_payload__input_hash.
+
+api_contracts:
+  - method: POST
+    path: /payload
+    request_schema:
+      type: object
+      additionalProperties: false
+      required: [list_1, list_2]
+      properties:
+        list_1: {type: array, minItems: 1, maxItems: 1000, items: {type: string, maxLength: 10000}}
+        list_2: {type: array, minItems: 1, maxItems: 1000, items: {type: string, maxLength: 10000}}
+      rules:
+        - len(list_1) == len(list_2)
+        - items contain no U+0000 and no lone surrogates
+    response_schema:
+      "201":
+        type: object
+        properties: {id: {type: string, format: uuid}, message: {const: "Payload created"}}
+      "200":
+        type: object
+        properties: {id: {type: string, format: uuid}, message: {const: "Payload already exists"}}
+      "422": {description: "FastAPI validation error body, {\"detail\": [...]}, rendered as ASCII-escaped JSON"}
+      "500": {description: "Unhandled DB or commit error. No partial payload is visible."}
+  - method: GET
+    path: /payload/{id}
+    path_params: {id: {type: string, format: uuid}}
+    response_schema:
+      "200": {type: object, additionalProperties: false, properties: {output: {type: string}}}
+      "404": {type: object, properties: {detail: {const: "Payload not found"}}}
+      "422": {description: "id is not a UUID"}
+  - method: GET
+    path: /health
+    response_schema:
+      "200": {type: object, properties: {status: {const: "ok"}}}
+
+cli_contract:
+  command: cache-cli
+  usage: "cache-cli [-h|--host URL] [-r|--repeat N] [-i|--input FILE|-] [-j|--json JSON] [-o|--output FILE|-] [--help]"
+  arguments:
+    host: {flags: ["-h", "--host"], type: AnyHttpUrl, default: "http://localhost:8000"}
+    repeat: {flags: ["-r", "--repeat"], type: PositiveInt, default: 1}
+    input_file: {flags: ["-i", "--input"], type: str, default: null, note: '"-" = stdin'}
+    json_input: {flags: ["-j", "--json"], type: str, default: null}
+    output_file: {flags: ["-o", "--output"], type: str, default: "-", note: '"-" = stdout'}
+    help: {flags: ["--help"]}
+  constraints:
+    - exactly one of input_file / json_input
+    - environment variables are not read
+  output_line: '{"iteration": int (1-based), "id": "uuid", "created": bool, "output": str}'
+  exit_codes: {0: success, 1: HTTP or connection failure, 2: invalid arguments or input (argparse errors also exit 2)}
+
+event_contracts: []   # no message topics produced or consumed
+
+data_model_changes:
+  postgres:
+    - table: transformation
+      change: create
+      migration_id: "0001"
+      reversible: true
+      columns:
+        id: BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY
+        input_hash: CHAR(64) NOT NULL
+        input_value: TEXT NOT NULL
+        output_value: TEXT NOT NULL
+        created_at: TIMESTAMPTZ NOT NULL DEFAULT now()
+      indexes:
+        - {name: idx_transformation__input_hash, columns: [input_hash], unique: true}
+    - table: payload
+      change: create
+      migration_id: "0001"
+      reversible: true
+      columns:
+        id: UUID PRIMARY KEY            # uuid4 generated in the app
+        input_hash: CHAR(64) NOT NULL
+        output: TEXT NOT NULL
+        created_at: TIMESTAMPTZ NOT NULL DEFAULT now()
+      indexes:
+        - {name: idx_payload__input_hash, columns: [input_hash], unique: true}
+
+non_functional_requirements:
+  - type: external_call_efficiency
+    requirement: Transformer calls == number of distinct strings across any sequential request sequence.
+    measurement: CountingTransformerClient injected through dependency_overrides.
+  - type: db_round_trips
+    requirement: <= 5 SQL statements per POST at any size up to the limits; exactly 1 on a repeated payload.
+    measurement: SQLAlchemy before_cursor_execute listener counting statements (integration test I-9).
+  - type: bind_param_ceiling
+    requirement: MAX_LIST_LENGTH * 2 * 3 < 32767 (asyncpg's per-statement query-argument limit).
+    measurement: Arithmetic on the constants (6 000 at the current limits). Re-check when raising MAX_LIST_LENGTH; no automated test.
+  - type: startup
+    requirement: GET /health returns 200 within 30 s of `docker compose up` on a dev laptop.
+    measurement: Manual check M-1 / compose healthcheck.
+
+deployment_changes:
+  - service: caching-service
+    change: new_service
+    notes: >
+      Dockerfile (python:3.12-slim + uv, public PyPI only, non-root user) and docker-compose.yml with
+      postgres:16-alpine, a one-shot `migrations` service (`alembic upgrade head`), and `caching-service`
+      on :8000. App env: CACHING_SERVICE_DATABASE_URL (required), CACHING_SERVICE_LOG_LEVEL (default INFO).
+
+out_of_scope:
+  - Redis or in-process cache tiers
+  - Cache expiry or invalidation
+  - Cross-request locking or single-flight on cache misses
+  - Authentication, authorization, rate limiting
+  - Payload update or delete endpoints
+  - Storing the input lists on the payload row
+  - Kubernetes or other orchestration manifests
