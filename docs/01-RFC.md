@@ -187,8 +187,8 @@ cache-cli [-h|--host URL] [-r|--repeat N] [-i|--input FILE|-] [-j|--json JSON] [
 - Each iteration: `POST /payload`, then `GET /payload/{id}`, then write one JSON line
   `{"iteration": i, "id": ..., "created": bool, "output": ...}`.
 - Exit codes: `0` success, `1` HTTP or connection error, `2` invalid arguments or input.
-- `run(settings, http_client, stdin, stdout)` takes an injected `httpx.Client`. Tests pass Starlette's
-  `TestClient(app)` (an `httpx.Client` subclass) to run the CLI against the real app in-process.
+- `run(settings, http_client, stdin, stdout)` takes an injected `httpx2.Client`. Tests pass Starlette's
+  `TestClient(app)` (an `httpx2.Client` subclass) to run the CLI against the real app in-process.
 
 ---
 

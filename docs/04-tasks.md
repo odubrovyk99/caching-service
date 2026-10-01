@@ -6,7 +6,7 @@
 
 **Architecture:** Layered: `api/routes` → `use_cases` → `services` → `db/repositories` → SQLAlchemy models, with the transformer behind a `clients/` protocol. Postgres is the only cache. Transformations are keyed by sha256 of the string; payloads by sha256 of canonical JSON of both lists. Every write uses `INSERT … ON CONFLICT DO NOTHING`, so concurrent requests converge without locks. The CLI is a second package in the same distribution and reuses the server's request schema for client-side validation.
 
-**Tech Stack:** Python 3.12, uv, FastAPI ≥ 0.121, SQLAlchemy 2.0 async + asyncpg, Alembic, Pydantic v2 + pydantic-settings, httpx, stdlib logging, pytest + pytest-asyncio + testcontainers[postgres], ruff, black, mypy, Docker + compose.
+**Tech Stack:** Python 3.12, uv, FastAPI ≥ 0.121, SQLAlchemy 2.0 async + asyncpg, Alembic, Pydantic v2 + pydantic-settings, httpx2, stdlib logging, pytest + pytest-asyncio + testcontainers[postgres], ruff, black, mypy, Docker + compose.
 
 **Spec:** `docs/02-spec.yaml` (acceptance criteria AC-1..AC-39). Design rationale is in `docs/01-RFC.md`, test IDs in `docs/03-test-checklist.md`. Read the spec's ACs alongside each task. Test names below cite the AC or checklist ID they pin.
 
@@ -18,6 +18,7 @@
 - Line length 120. `ruff check .`, `black --check .` and `mypy caching_service cache_cli migrations/env.py` must be clean at the end of every task. Code blocks in this plan are not guaranteed black-formatted, so run `uv run black . && uv run ruff check --fix .` before each lint check. mypy covers `migrations/env.py` only, because a revision file named `0001_….py` is not a valid module name for mypy.
 - f-strings only, except logging calls, which pass lazy `%s` arguments (`logger.info("… %s", value)`). Imports ordered stdlib → third-party → local. Module constants directly after imports.
 - **Docstrings:** full Google style on every production class, function and method: summary, blank line, `Args:` listing every parameter, `Returns:`/`Yields:` for non-`None` returns, `Raises:` where relevant. Never trim to a one-liner. Test functions carry no docstrings; their names say what they pin.
+- **HTTP client is `httpx2`** (Pydantic's API-identical fork of `httpx 0.28.1`). Starlette ≥ 1.7's `TestClient` is built on it, and `httpx` and `httpx2` objects are not interchangeable, so the CLI, its tests and the API tests all use `httpx2`.
 - **Pydantic vs dataclass:** Pydantic only where validation or the HTTP/CLI boundary needs it (request/response models, settings). Internal values built by our own code are `@dataclass(frozen=True, slots=True)`.
 - SQLAlchemy: `DeclarativeBase` + `Mapped[...]` + `mapped_column()` only. Table names singular lowercase. Index names `idx_{table}__{field}`.
 - Exact strings from the spec: `"Payload created"`, `"Payload already exists"`, `"Payload not found"`, separator `", "`, `{"status": "ok"}`.
@@ -102,7 +103,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.38",
     "asyncpg>=0.30.0",
     "alembic>=1.14",
-    "httpx>=0.28.1",
+    "httpx2>=2.13.1",
 ]
 
 [project.scripts]
@@ -2066,7 +2067,7 @@ git commit -m "feat: add payload service and create/get use cases"
 
 **Files:**
 - Create: `caching_service/core/db.py`
-- Create: `caching_service/api/__init__.py` (empty), `caching_service/api/app.py`, `caching_service/api/lifespan.py`, `caching_service/api/dependencies.py`, `caching_service/api/responses.py`, `caching_service/api/errors.py`
+- Create: `caching_service/api/__init__.py` (empty), `caching_service/api/app.py`, `caching_service/api/lifespan.py`, `caching_service/api/dependencies.py`, `caching_service/api/errors.py`
 - Create: `caching_service/api/routes/__init__.py` (empty), `caching_service/api/routes/payload.py`, `caching_service/api/routes/health.py`
 - Test: `tests/integration/api/conftest.py`, `tests/integration/api/test_create_and_read_payload.py`, `tests/integration/api/test_validation.py`, `tests/integration/api/test_statement_budget.py`, `tests/integration/api/test_concurrency.py`, `tests/integration/api/test_commit_timing.py`, `tests/integration/api/test_lifespan.py`
 
@@ -2084,7 +2085,7 @@ git commit -m "feat: add payload service and create/get use cases"
 ```python
 from collections.abc import AsyncIterator
 
-import httpx
+import httpx2
 import pytest
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -2109,8 +2110,8 @@ def app(session_factory: async_sessionmaker[AsyncSession], transformer: Counting
 
 
 @pytest.fixture
-async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+async def client(app: FastAPI) -> AsyncIterator[httpx2.AsyncClient]:
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url="http://test") as client:
         yield client
 ```
 
@@ -2120,7 +2121,7 @@ async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
 from http import HTTPStatus
 from uuid import UUID, uuid4
 
-import httpx
+import httpx2
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from caching_service.constants import MAX_STRING_LENGTH, PAYLOAD_CREATED_MESSAGE, PAYLOAD_EXISTS_MESSAGE
@@ -2130,7 +2131,7 @@ from tests.integration.database import count_rows
 from tests.samples import SAMPLE_OUTPUT, SAMPLE_REQUEST
 
 
-async def _create_and_read(client: httpx.AsyncClient, body: dict[str, list[str]]) -> str:
+async def _create_and_read(client: httpx2.AsyncClient, body: dict[str, list[str]]) -> str:
     created = await client.post("/payload", json=body)
     assert created.status_code == HTTPStatus.CREATED, created.text
     fetched = await client.get(f"/payload/{created.json()['id']}")
@@ -2139,7 +2140,7 @@ async def _create_and_read(client: httpx.AsyncClient, body: dict[str, list[str]]
 
 
 async def test_sample_input_is_created_and_read_back(
-    client: httpx.AsyncClient, transformer: CountingTransformerClient
+    client: httpx2.AsyncClient, transformer: CountingTransformerClient
 ) -> None:
     created = await client.post("/payload", json=SAMPLE_REQUEST)
 
@@ -2153,7 +2154,7 @@ async def test_sample_input_is_created_and_read_back(
 
 
 async def test_repeated_input_returns_the_same_id_without_new_work(
-    client: httpx.AsyncClient, transformer: CountingTransformerClient, engine: AsyncEngine
+    client: httpx2.AsyncClient, transformer: CountingTransformerClient, engine: AsyncEngine
 ) -> None:
     first = await client.post("/payload", json=SAMPLE_REQUEST)
     calls_after_first = len(transformer.calls)
@@ -2168,7 +2169,7 @@ async def test_repeated_input_returns_the_same_id_without_new_work(
 
 
 async def test_strings_cached_by_an_earlier_request_are_not_transformed_again(
-    client: httpx.AsyncClient, transformer: CountingTransformerClient
+    client: httpx2.AsyncClient, transformer: CountingTransformerClient
 ) -> None:
     await client.post("/payload", json={"list_1": ["a", "b"], "list_2": ["c", "d"]})
     transformer.calls.clear()
@@ -2180,7 +2181,7 @@ async def test_strings_cached_by_an_earlier_request_are_not_transformed_again(
 
 
 async def test_cached_empty_string_is_not_transformed_again(
-    client: httpx.AsyncClient, transformer: CountingTransformerClient
+    client: httpx2.AsyncClient, transformer: CountingTransformerClient
 ) -> None:
     await client.post("/payload", json={"list_1": [""], "list_2": ["a"]})
     transformer.calls.clear()
@@ -2191,7 +2192,7 @@ async def test_cached_empty_string_is_not_transformed_again(
 
 
 async def test_duplicates_in_one_cold_request_are_transformed_once(
-    client: httpx.AsyncClient, transformer: CountingTransformerClient
+    client: httpx2.AsyncClient, transformer: CountingTransformerClient
 ) -> None:
     output = await _create_and_read(client, {"list_1": ["a", "a"], "list_2": ["a", "b"]})
 
@@ -2199,7 +2200,7 @@ async def test_duplicates_in_one_cold_request_are_transformed_once(
     assert output == "A, A, A, B"
 
 
-async def test_swapped_lists_are_a_different_payload(client: httpx.AsyncClient) -> None:
+async def test_swapped_lists_are_a_different_payload(client: httpx2.AsyncClient) -> None:
     first = await client.post("/payload", json={"list_1": ["a"], "list_2": ["b"]})
     second = await client.post("/payload", json={"list_1": ["b"], "list_2": ["a"]})
 
@@ -2207,11 +2208,11 @@ async def test_swapped_lists_are_a_different_payload(client: httpx.AsyncClient) 
     assert second.json()["id"] != first.json()["id"]
 
 
-async def test_empty_string_item_produces_a_leading_separator(client: httpx.AsyncClient) -> None:
+async def test_empty_string_item_produces_a_leading_separator(client: httpx2.AsyncClient) -> None:
     assert await _create_and_read(client, {"list_1": [""], "list_2": ["a"]}) == ", A"
 
 
-async def test_unicode_long_and_separator_strings_round_trip(client: httpx.AsyncClient) -> None:
+async def test_unicode_long_and_separator_strings_round_trip(client: httpx2.AsyncClient) -> None:
     long_value = "x" * MAX_STRING_LENGTH
     body = {"list_1": ["straße", long_value], "list_2": ["héllo 👋", "a, b"]}
 
@@ -2220,20 +2221,20 @@ async def test_unicode_long_and_separator_strings_round_trip(client: httpx.Async
     assert output == f"STRASSE, HÉLLO 👋, {long_value.upper()}, A, B"
 
 
-async def test_unknown_id_returns_404(client: httpx.AsyncClient) -> None:
+async def test_unknown_id_returns_404(client: httpx2.AsyncClient) -> None:
     response = await client.get(f"/payload/{uuid4()}")
 
     assert response.status_code == HTTPStatus.NOT_FOUND
     assert response.json() == {"detail": "Payload not found"}
 
 
-async def test_malformed_id_returns_422(client: httpx.AsyncClient) -> None:
+async def test_malformed_id_returns_422(client: httpx2.AsyncClient) -> None:
     response = await client.get("/payload/not-a-uuid")
 
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
 
-async def test_health(client: httpx.AsyncClient) -> None:
+async def test_health(client: httpx2.AsyncClient) -> None:
     response = await client.get("/health")
 
     assert response.status_code == HTTPStatus.OK
@@ -2246,7 +2247,7 @@ async def test_health(client: httpx.AsyncClient) -> None:
 import json
 from http import HTTPStatus
 
-import httpx
+import httpx2
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -2264,15 +2265,13 @@ INVALID_BODIES = {
     "array_body": json.dumps([["a"], ["b"]]),
     "nul_character": json.dumps({"list_1": ["a\x00b"], "list_2": ["c"]}),
     "lone_surrogate": '{"list_1": ["\\ud800"], "list_2": ["c"]}',
-    "too_many_items": json.dumps(
-        {"list_1": ["a"] * (MAX_LIST_LENGTH + 1), "list_2": ["b"] * (MAX_LIST_LENGTH + 1)}
-    ),
+    "too_many_items": json.dumps({"list_1": ["a"] * (MAX_LIST_LENGTH + 1), "list_2": ["b"] * (MAX_LIST_LENGTH + 1)}),
 }
 
 
 @pytest.mark.parametrize("raw_body", list(INVALID_BODIES.values()), ids=list(INVALID_BODIES))
 async def test_invalid_bodies_are_rejected_without_side_effects(
-    client: httpx.AsyncClient, transformer: CountingTransformerClient, engine: AsyncEngine, raw_body: str
+    client: httpx2.AsyncClient, transformer: CountingTransformerClient, engine: AsyncEngine, raw_body: str
 ) -> None:
     response = await client.post(
         "/payload", content=raw_body.encode("utf-8"), headers={"content-type": "application/json"}
@@ -2284,7 +2283,7 @@ async def test_invalid_bodies_are_rejected_without_side_effects(
     assert await count_rows(engine, TransformationModel) == 0
 
 
-async def test_unequal_lengths_error_names_the_rule(client: httpx.AsyncClient) -> None:
+async def test_unequal_lengths_error_names_the_rule(client: httpx2.AsyncClient) -> None:
     response = await client.post("/payload", json={"list_1": ["a", "b"], "list_2": ["c"]})
 
     assert "list_1 and list_2 must have the same length" in response.text
@@ -2297,7 +2296,7 @@ from collections.abc import Iterator
 from http import HTTPStatus
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -2324,7 +2323,7 @@ def executed_statements(engine: AsyncEngine) -> Iterator[list[str]]:
 
 
 async def test_new_payload_at_the_size_limit_uses_at_most_five_statements(
-    client: httpx.AsyncClient, executed_statements: list[str]
+    client: httpx2.AsyncClient, executed_statements: list[str]
 ) -> None:
     body = {
         "list_1": [f"a{index}" for index in range(MAX_LIST_LENGTH)],
@@ -2338,7 +2337,7 @@ async def test_new_payload_at_the_size_limit_uses_at_most_five_statements(
 
 
 async def test_repeated_payload_uses_exactly_one_statement(
-    client: httpx.AsyncClient, executed_statements: list[str]
+    client: httpx2.AsyncClient, executed_statements: list[str]
 ) -> None:
     await client.post("/payload", json=SAMPLE_REQUEST)
     executed_statements.clear()
@@ -2355,7 +2354,7 @@ async def test_repeated_payload_uses_exactly_one_statement(
 import asyncio
 from http import HTTPStatus
 
-import httpx
+import httpx2
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from caching_service.db.models import PayloadModel
@@ -2364,7 +2363,7 @@ from tests.samples import SAMPLE_REQUEST
 
 
 async def test_concurrent_identical_posts_converge_on_one_payload(
-    client: httpx.AsyncClient, engine: AsyncEngine
+    client: httpx2.AsyncClient, engine: AsyncEngine
 ) -> None:
     responses = await asyncio.gather(*(client.post("/payload", json=SAMPLE_REQUEST) for _ in range(5)))
 
@@ -2373,16 +2372,14 @@ async def test_concurrent_identical_posts_converge_on_one_payload(
     assert await count_rows(engine, PayloadModel) == 1
 
 
-async def test_overlapping_requests_in_opposite_order_do_not_deadlock(client: httpx.AsyncClient) -> None:
+async def test_overlapping_requests_in_opposite_order_do_not_deadlock(client: httpx2.AsyncClient) -> None:
     for round_number in range(10):
         values = [f"r{round_number}-v{index}" for index in range(100)]
         reversed_values = values[::-1]
         forward = {"list_1": values[:50], "list_2": values[50:]}
         backward = {"list_1": reversed_values[:50], "list_2": reversed_values[50:]}
 
-        responses = await asyncio.gather(
-            client.post("/payload", json=forward), client.post("/payload", json=backward)
-        )
+        responses = await asyncio.gather(client.post("/payload", json=forward), client.post("/payload", json=backward))
 
         assert [response.status_code for response in responses] == [HTTPStatus.CREATED, HTTPStatus.CREATED]
 ```
@@ -2392,7 +2389,7 @@ async def test_overlapping_requests_in_opposite_order_do_not_deadlock(client: ht
 ```python
 from http import HTTPStatus
 
-import httpx
+import httpx2
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -2408,9 +2405,9 @@ class _FailingCommitSession(AsyncSession):
 async def test_commit_failure_reaches_the_client(app: FastAPI, engine: AsyncEngine) -> None:
     failing_factory = async_sessionmaker(engine, class_=_FailingCommitSession, expire_on_commit=False)
     app.dependency_overrides[get_session_factory] = lambda: failing_factory
-    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    transport = httpx2.ASGITransport(app=app, raise_app_exceptions=False)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/payload", json=SAMPLE_REQUEST)
 
     # With FastAPI's default yield-dependency scope the client would already hold a 201 here.
@@ -2616,48 +2613,23 @@ def get_get_payload_use_case(session: SessionDep) -> GetPayloadUseCase:
     return GetPayloadUseCase(payload_service=PayloadService(PayloadRepository(session)))
 ```
 
-`caching_service/api/responses.py`:
-
-```python
-import json
-from typing import Any
-
-from fastapi.responses import JSONResponse
-
-
-class AsciiJSONResponse(JSONResponse):
-    """JSON response that escapes every non-ASCII character.
-
-    Used for validation errors. FastAPI echoes the offending input back, and a lone surrogate in that
-    input cannot be encoded as UTF-8, so the default renderer would turn a 422 into a 500.
-    """
-
-    def render(self, content: Any) -> bytes:
-        """Serialize content as ASCII-only JSON.
-
-        Args:
-            content: JSON-compatible content.
-
-        Returns:
-            The encoded body.
-        """
-        return json.dumps(content, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode("ascii")
-```
-
 `caching_service/api/errors.py`:
 
 ```python
+import json
 from http import HTTPStatus
 
-from fastapi import Request
+from fastapi import Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 
-from caching_service.api.responses import AsciiJSONResponse
 
-
-async def validation_error_handler(request: Request, error: RequestValidationError) -> AsciiJSONResponse:
+async def validation_error_handler(request: Request, error: RequestValidationError) -> Response:
     """Render request validation errors like FastAPI does, but safe for any input.
+
+    FastAPI echoes the offending input back in the error body. The default renderer encodes it as UTF-8,
+    which fails on a broken Unicode character (half of an emoji code sent alone, e.g. ``"\\ud800"``) and
+    turns the 422 into a 500. ``ensure_ascii`` escapes every non-ASCII character, so the body always encodes.
 
     Args:
         request: The rejected request.
@@ -2666,9 +2638,8 @@ async def validation_error_handler(request: Request, error: RequestValidationErr
     Returns:
         A 422 response with FastAPI's usual ``{"detail": [...]}`` body, ASCII-escaped.
     """
-    return AsciiJSONResponse(
-        status_code=HTTPStatus.UNPROCESSABLE_ENTITY, content={"detail": jsonable_encoder(error.errors())}
-    )
+    body = json.dumps({"detail": jsonable_encoder(error.errors())}, ensure_ascii=True)
+    return Response(content=body, status_code=HTTPStatus.UNPROCESSABLE_ENTITY, media_type="application/json")
 ```
 
 `caching_service/api/routes/payload.py`:
@@ -3196,8 +3167,8 @@ git commit -m "feat: add cache-cli argument parsing and input/output handling"
 **Interfaces:**
 - Consumes: `parse_settings`, `CacheCliSettings`, `load_request`, `open_sink`, CLI constants (Task 9); `PayloadCreateResponse`, `PayloadReadResponse` (Task 3); `create_app`, `get_session_factory`, `get_transformer` (Task 8); `get_settings` (Task 4); `truncate_tables` (Task 4); `CountingTransformerClient` (Task 6); `SAMPLE_REQUEST`/`SAMPLE_OUTPUT` (Task 7).
 - Produces:
-  - `run_iterations(client: httpx.Client, request: PayloadCreateRequest, repeat: int) -> Iterator[str]`
-  - `main(argv: Sequence[str], stdin: TextIO | None = None, stdout: TextIO | None = None, stderr: TextIO | None = None, http_client_factory: Callable[[CacheCliSettings], httpx.Client] = build_http_client) -> int`
+  - `run_iterations(client: httpx2.Client, request: PayloadCreateRequest, repeat: int) -> Iterator[str]`
+  - `main(argv: Sequence[str], stdin: TextIO | None = None, stdout: TextIO | None = None, stderr: TextIO | None = None, http_client_factory: Callable[[CacheCliSettings], httpx2.Client] = build_http_client) -> int`
   - `entrypoint() -> None` (the `cache-cli` console script).
 
 - [ ] **Step 1: Write the failing tests**
@@ -3210,7 +3181,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 
 from cache_cli.main import main
@@ -3225,25 +3196,25 @@ class CliRun:
     code: int
     stdout: str
     stderr: str
-    requests: list[httpx.Request]
+    requests: list[httpx2.Request]
 
 
 def _run(argv: list[str], *, fail_from: int | None = None, refuse_connection: bool = False) -> CliRun:
-    requests: list[httpx.Request] = []
+    requests: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         if refuse_connection:
-            raise httpx.ConnectError("connection refused", request=request)
+            raise httpx2.ConnectError("connection refused", request=request)
         if fail_from is not None and len(requests) >= fail_from:
-            return httpx.Response(500, json={"detail": "boom"})
+            return httpx2.Response(500, json={"detail": "boom"})
         if request.method == "POST":
             first_post = sum(item.method == "POST" for item in requests) == 1
-            return httpx.Response(201 if first_post else 200, json={"id": PAYLOAD_ID, "message": "ignored"})
-        return httpx.Response(200, json={"output": "A, B"})
+            return httpx2.Response(201 if first_post else 200, json={"id": PAYLOAD_ID, "message": "ignored"})
+        return httpx2.Response(200, json={"output": "A, B"})
 
-    def factory(settings: CacheCliSettings) -> httpx.Client:
-        return httpx.Client(transport=httpx.MockTransport(handler), base_url=str(settings.host))
+    def factory(settings: CacheCliSettings) -> httpx2.Client:
+        return httpx2.Client(transport=httpx2.MockTransport(handler), base_url=str(settings.host))
 
     stdout, stderr = io.StringIO(), io.StringIO()
     code = main(argv, stdin=io.StringIO(SAMPLE_JSON), stdout=stdout, stderr=stderr, http_client_factory=factory)
@@ -3407,12 +3378,12 @@ import json
 from collections.abc import Iterator
 from http import HTTPStatus
 
-import httpx
+import httpx2
 
 from caching_service.schemas.payload import PayloadCreateRequest, PayloadCreateResponse, PayloadReadResponse
 
 
-def run_iterations(client: httpx.Client, request: PayloadCreateRequest, repeat: int) -> Iterator[str]:
+def run_iterations(client: httpx2.Client, request: PayloadCreateRequest, repeat: int) -> Iterator[str]:
     """POST the payload and GET it back ``repeat`` times, yielding one JSON line per iteration.
 
     Lines are yielded as each iteration finishes, so a later failure keeps the earlier results.
@@ -3426,7 +3397,7 @@ def run_iterations(client: httpx.Client, request: PayloadCreateRequest, repeat: 
         A JSON object with ``iteration`` (1-based), ``id``, ``created`` and ``output``.
 
     Raises:
-        httpx.HTTPError: On a connection failure or a non-2xx response.
+        httpx2.HTTPError: On a connection failure or a non-2xx response.
     """
     body = request.model_dump()
     for iteration in range(1, repeat + 1):
@@ -3457,17 +3428,17 @@ from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 from typing import TextIO
 
-import httpx
+import httpx2
 
 from cache_cli.constants import EXIT_INVALID_INPUT, EXIT_OK, EXIT_REQUEST_FAILED, HTTP_TIMEOUT_SECONDS, PROG_NAME
 from cache_cli.io import load_request, open_sink
 from cache_cli.runner import run_iterations
 from cache_cli.settings import CacheCliSettings, parse_settings
 
-HttpClientFactory = Callable[[CacheCliSettings], httpx.Client]
+HttpClientFactory = Callable[[CacheCliSettings], httpx2.Client]
 
 
-def build_http_client(settings: CacheCliSettings) -> httpx.Client:
+def build_http_client(settings: CacheCliSettings) -> httpx2.Client:
     """Create the HTTP client for a real run.
 
     Args:
@@ -3476,7 +3447,7 @@ def build_http_client(settings: CacheCliSettings) -> httpx.Client:
     Returns:
         A client whose ``base_url`` is ``settings.host``.
     """
-    return httpx.Client(base_url=str(settings.host), timeout=HTTP_TIMEOUT_SECONDS)
+    return httpx2.Client(base_url=str(settings.host), timeout=HTTP_TIMEOUT_SECONDS)
 
 
 def main(
@@ -3519,7 +3490,7 @@ def main(
             for line in run_iterations(client, request, settings.repeat):
                 sink.write(f"{line}\n")
                 sink.flush()
-        except httpx.HTTPError as error:
+        except httpx2.HTTPError as error:
             print(f"{PROG_NAME}: request failed: {error}", file=stderr)
             return EXIT_REQUEST_FAILED
     return EXIT_OK

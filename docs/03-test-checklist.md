@@ -71,11 +71,11 @@ tables before each test.
 - [ ] **U-10h** Env `HOST`, `REPEAT`, `OUTPUT` set → ignored. *(AC-35)*
 - [ ] **U-11a** `load_request` from `-j`, from file, from stdin `-`. All give the same `PayloadCreateRequest`. *(AC-27)*
 - [ ] **U-11b** Missing file → `OSError`. Invalid JSON → `ValidationError`. Unequal lengths → `ValidationError`. *(AC-33)*
-- [ ] **U-12a** `main` with `httpx.MockTransport`: one iteration writes one correct JSON line, exit 0. *(AC-26)*
+- [ ] **U-12a** `main` with `httpx2.MockTransport`: one iteration writes one correct JSON line, exit 0. *(AC-26)*
 - [ ] **U-12b** `-r 3` → 3 lines, iterations 1..3, `created` taken from the 201/200 status. *(AC-28)*
 - [ ] **U-12c** `-o file` → file has the lines, stdout empty. *(AC-29)*
 - [ ] **U-12d** Server 500 → exit 1, "request failed" on stderr. *(AC-34)*
-- [ ] **U-12e** `httpx.ConnectError` → exit 1. *(AC-34)*
+- [ ] **U-12e** `httpx2.ConnectError` → exit 1. *(AC-34)*
 - [ ] **U-12f** Failure on iteration 2 of 3 → line 1 present in the output, exit 1. *(AC-34)*
 - [ ] **U-12g** Invalid input (unequal lists, both sources, bad `-r`) → exit 2, **transport saw 0 requests**. *(AC-30, AC-31, AC-33)*
 - [ ] **U-12h** `-o /nonexistent-dir/x.jsonl` → exit 2, transport saw 0 requests. *(AC-36)*
@@ -91,7 +91,7 @@ tables before each test.
 - [ ] **I-3b** `get_output_by_id` returns output or `None`. `get_id_by_input_hash` returns id or `None`.
 - [ ] **I-13** Two sessions insert the same transformation. Both commit without error, and 1 row exists. *(AC-16)*
 
-## Integration — API (`tests/integration/api/`), httpx `ASGITransport` + counting transformer
+## Integration — API (`tests/integration/api/`), httpx2 `ASGITransport` + counting transformer
 
 - [ ] **I-4** Sample input → 201, then GET returns the exact sample output, with 6 transformer calls. *(AC-1, AC-2, AC-19)*
 - [ ] **I-5** Same POST twice → 200, same id, "Payload already exists", calls unchanged, row counts unchanged. *(AC-10)*

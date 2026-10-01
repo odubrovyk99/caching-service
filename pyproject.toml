@@ -10,7 +10,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.38",
     "asyncpg>=0.30.0",
     "alembic>=1.14",
-    "httpx>=0.28.1",
+    "httpx2>=2.13.1",
 ]
 
 [project.scripts]
