@@ -1844,17 +1844,22 @@ async def test_new_input_produces_the_sample_output() -> None:
 
 async def test_known_input_takes_the_fast_path_without_transforming() -> None:
     payload_repository = InMemoryPayloadRepository()
+    first = await _use_case(payload_repository, CountingTransformerClient()).execute(
+        SAMPLE_REQUEST["list_1"], SAMPLE_REQUEST["list_2"]
+    )
+    # Fresh transformation cache: only the payload fast path can avoid calling the transformer now.
     transformer = CountingTransformerClient()
-    use_case = _use_case(payload_repository, transformer)
-    first = await use_case.execute(SAMPLE_REQUEST["list_1"], SAMPLE_REQUEST["list_2"])
-    transformer.calls.clear()
 
-    second = await use_case.execute(SAMPLE_REQUEST["list_1"], SAMPLE_REQUEST["list_2"])
+    second = await _use_case(payload_repository, transformer).execute(
+        SAMPLE_REQUEST["list_1"], SAMPLE_REQUEST["list_2"]
+    )
 
     assert second.created is False
     assert second.payload_id == first.payload_id
     assert transformer.calls == []
-    assert set(payload_repository.ids_by_hash) == {payload_input_hash(SAMPLE_REQUEST["list_1"], SAMPLE_REQUEST["list_2"])}
+    assert set(payload_repository.ids_by_hash) == {
+        payload_input_hash(SAMPLE_REQUEST["list_1"], SAMPLE_REQUEST["list_2"])
+    }
 
 
 async def test_storing_a_payload_is_logged(caplog: pytest.LogCaptureFixture) -> None:
