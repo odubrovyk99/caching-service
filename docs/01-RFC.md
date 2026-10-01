@@ -301,7 +301,7 @@ Full schemas are in `02-spec.yaml`.
 
 None open.
 
-Logging is stdlib `logging`, configured once in `lifespan` (level from `CACHING_SERVICE_LOG_LEVEL`,
+Logging is stdlib `logging`, configured once in `lifespan` (level from `LOG_LEVEL`,
 default `INFO`). All dependencies come from public PyPI, so `uv sync` and `docker compose up --build` need
 no credentials.
 

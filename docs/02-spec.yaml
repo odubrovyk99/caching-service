@@ -179,7 +179,7 @@ acceptance_criteria:
   - id: AC-25
     description: The real lifespan wiring works end-to-end.
     given_when_then: >
-      Given CACHING_SERVICE_DATABASE_URL points at a migrated Postgres, when the app starts through its
+      Given POSTGRES_* env vars point at a migrated Postgres, when the app starts through its
       lifespan (no dependency overrides) and POST then GET run, then both succeed.
 
   # ---- cache-cli ----
@@ -348,7 +348,7 @@ deployment_changes:
     notes: >
       Dockerfile (python:3.12-slim + uv, public PyPI only, non-root user) and docker-compose.yml with
       postgres:16-alpine, a one-shot `migrations` service (`alembic upgrade head`), and `caching-service`
-      on :8000. App env: CACHING_SERVICE_DATABASE_URL (required), CACHING_SERVICE_LOG_LEVEL (default INFO).
+      on :8000. App env: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB (required), POSTGRES_HOST (default localhost), POSTGRES_PORT (default 5432), LOG_LEVEL (default INFO).
 
 out_of_scope:
   - Redis or in-process cache tiers

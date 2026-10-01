@@ -109,7 +109,7 @@ tables before each test.
       deadlock. *(AC-39)*
 - [ ] **I-14** Session factory whose `commit()` raises → POST returns 500 (client built with
       `raise_app_exceptions=False`). *(AC-22)*
-- [ ] **I-15** No overrides. `CACHING_SERVICE_DATABASE_URL` → container. `with TestClient(create_app())`:
+- [ ] **I-15** No overrides. `POSTGRES_*` env → container (`set_postgres_env`). `with TestClient(create_app())`:
       `/health` 200, POST 201, GET 200. *(AC-24, AC-25)*
 - [ ] **I-16** Unicode and long strings: `"straße"`, `"héllo 👋"`, a 10000-char string, and a string containing
       `", "` all round-trip through POST/GET. *(AC-17, AC-18)*
