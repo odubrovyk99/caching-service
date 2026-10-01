@@ -3074,7 +3074,7 @@ def parse_settings(argv: Sequence[str]) -> CacheCliSettings:
     """
     parser = ArgumentParser(prog=PROG_NAME, description=HELP_DESCRIPTION, add_help=False)
     parser.add_argument("--help", action="help", help="Show this help message and exit.")
-    cli_source = CliSettingsSource(CacheCliSettings, root_parser=parser)
+    cli_source: CliSettingsSource[CacheCliSettings] = CliSettingsSource(CacheCliSettings, root_parser=parser)
     return CliApp.run(CacheCliSettings, cli_args=list(argv), cli_settings_source=cli_source)
 ```
 
