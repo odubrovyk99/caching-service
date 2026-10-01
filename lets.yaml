@@ -38,15 +38,6 @@ commands:
         --env=<env>, -E  Env file with POSTGRES_* / LOG_LEVEL (default: ./.env if present)
     cmd: docker compose ${LETSOPT_ENV:+--env-file "$LETSOPT_ENV"} up --build
 
-  run-external:
-    description: Start migrations and the service against an external database (no bundled postgres)
-    options: |
-      Usage:
-        lets run-external [--env=<env>]
-      Options:
-        --env=<env>, -E  Env file with POSTGRES_HOST / POSTGRES_PORT / credentials (default: ./.env if present)
-    cmd: docker compose ${LETSOPT_ENV:+--env-file "$LETSOPT_ENV"} up --build --no-deps migrations caching-service
-
   stop:
     description: Stop the compose stack (keeps the database volume)
     cmd: docker compose down

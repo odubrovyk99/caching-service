@@ -33,18 +33,6 @@ LOG_LEVEL=INFO
 
 To use a different file: `lets run --env FILE` (runs `docker compose --env-file FILE up --build`).
 
-### External database
-
-Add `POSTGRES_HOST` and `POSTGRES_PORT` (plus that database's credentials) to `.env`, then start only the
-migrations and the service, without the bundled postgres:
-
-```bash
-lets run-external            # docker compose up --build --no-deps migrations caching-service
-```
-
-Use a hostname the containers can reach, **never `localhost`** (inside a container that is the container
-itself). For a database running directly on your machine use `host.docker.internal`.
-
 ## API
 
 | Method | Path | Result |
@@ -81,7 +69,6 @@ The same commands via [lets](https://lets-cli.org/):
 | `lets test [-p PATH]` | pytest (default `tests/`) |
 | `lets lint` | `mypy` + `ruff` + `black` (each also runnable alone) |
 | `lets run [--env FILE]` / `lets stop` | `docker compose [--env-file FILE] up --build` / `docker compose down` |
-| `lets run-external [--env FILE]` | migrations + service only, against an external database |
 | `lets alembic-upgrade` | apply migrations to the DB set by `POSTGRES_*` |
 | `lets alembic-revision -m "..."` | autogenerate a migration |
 

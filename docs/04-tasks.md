@@ -1053,12 +1053,47 @@ __all__ = ["Base", "PayloadModel", "TransformationModel"]
 script_location = %(here)s/migrations
 prepend_sys_path = .
 path_separator = os
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARNING
+handlers = console
+qualname =
+
+[logger_sqlalchemy]
+level = WARNING
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %H:%M:%S
 ```
 
 `migrations/env.py` (replace the generated file entirely):
 
 ```python
 import asyncio
+from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import pool
@@ -1070,6 +1105,10 @@ from caching_service.db.models import Base
 
 config = context.config
 target_metadata = Base.metadata
+
+# Logging from alembic.ini. Existing loggers stay enabled so tests and the app keep their own logging.
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def run_migrations_offline() -> None:
@@ -1657,8 +1696,8 @@ class TransformationService:
     async def transform_all(self, values: Iterable[str]) -> dict[str, str]:
         """Transform strings, calling the transformer only for strings never seen before.
 
-        Duplicates are collapsed before the cache lookup. The lookup happens once per request, so without
-        this a string repeated in one cold request would be sent to the transformer once per occurrence.
+        Duplicates are removed first: the cache is checked only once per request, so a string that appears
+        several times in a new request would otherwise be sent to the transformer several times.
 
         Args:
             values: Strings to transform, in any order, duplicates allowed.
@@ -1678,9 +1717,7 @@ class TransformationService:
             output = cached_outputs.get(input_hash)
             if output is None:
                 output = await self._transformer.transform(value)
-                new_records.append(
-                    TransformationRecord(input_hash=input_hash, input_value=value, output_value=output)
-                )
+                new_records.append(TransformationRecord(input_hash=input_hash, input_value=value, output_value=output))
             outputs[value] = output
 
         await self._repository.save_many(new_records)
@@ -3054,7 +3091,7 @@ class CacheCliSettings(BaseSettings):
 def parse_settings(argv: Sequence[str]) -> CacheCliSettings:
     """Parse and validate ``cache-cli`` arguments.
 
-    ``-h`` belongs to ``--host`` (as in the brief's usage line), so argparse's built-in ``-h/--help`` is
+    ``-h`` belongs to ``--host``, so argparse's built-in ``-h/--help`` is
     disabled and ``--help`` is registered on its own.
 
     Args:
@@ -3307,6 +3344,25 @@ def test_unwritable_output_exits_2_without_any_request(tmp_path: Path) -> None:
 
     assert run.code == 2
     assert run.requests == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["<html>not the caching service</html>", '{"unexpected": "shape"}'],
+    ids=["html_page", "wrong_json_shape"],
+)
+def test_success_status_with_a_non_payload_body_exits_1(body: str) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, text=body)
+
+    def factory(settings: CacheCliSettings) -> httpx2.Client:
+        return httpx2.Client(transport=httpx2.MockTransport(handler), base_url=str(settings.host))
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main(["-j", SAMPLE_JSON], stdin=io.StringIO(), stdout=stdout, stderr=stderr, http_client_factory=factory)
+
+    assert code == 1
+    assert "request failed" in stderr.getvalue()
 ```
 
 `tests/integration/cli/test_cli_end_to_end.py` (synchronous: `TestClient` runs the app on its own loop, so the engine uses NullPool and is created outside any loop):
@@ -3393,6 +3449,7 @@ def run_iterations(client: httpx2.Client, request: PayloadCreateRequest, repeat:
 
     Raises:
         httpx2.HTTPError: On a connection failure or a non-2xx response.
+        ValueError: If a 2xx response body is not JSON or not the expected payload response.
     """
     body = request.model_dump()
     for iteration in range(1, repeat + 1):
@@ -3485,7 +3542,9 @@ def main(
             for line in run_iterations(client, request, settings.repeat):
                 sink.write(f"{line}\n")
                 sink.flush()
-        except httpx2.HTTPError as error:
+        # ValueError: a 2xx body that is not JSON (JSONDecodeError) or not a payload response (ValidationError),
+        # e.g. when --host points at a different service.
+        except (httpx2.HTTPError, ValueError) as error:
             print(f"{PROG_NAME}: request failed: {error}", file=stderr)
             return EXIT_REQUEST_FAILED
     return EXIT_OK
@@ -3520,7 +3579,7 @@ git commit -m "feat: add cache-cli runner and console entry point"
 ### Task 11: Docker, compose and README
 
 **Files:**
-- Create: `Dockerfile`, `docker-compose.yml`, `README.md`, `lets.yaml` (optional task runner: `test`, `lint`/`mypy`/`ruff`/`black`, `run`/`run-external`/`stop`, `alembic-upgrade`, `alembic-revision`)
+- Create: `Dockerfile`, `docker-compose.yml`, `README.md`, `lets.yaml` (optional task runner: `test`, `lint`/`mypy`/`ruff`/`black`, `run`/`stop`, `alembic-upgrade`, `alembic-revision`)
 
 **Interfaces:**
 - Consumes: `caching_service.api.app:create_app` (uvicorn factory), `alembic.ini` + `migrations/`, env vars `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `LOG_LEVEL`. Public PyPI only, so the build needs no secrets.
@@ -3540,7 +3599,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.10 /uv /uvx /bin/
 
 WORKDIR /app
 
@@ -3566,7 +3625,8 @@ CMD ["uvicorn", "caching_service.api.app:create_app", "--factory", "--host", "0.
 `docker-compose.yml`:
 
 ```yaml
-
+# Values come from a .env file next to this file (or the shell), with local-dev defaults.
+# The same POSTGRES_* names configure both the postgres image and the service.
 x-db-env: &db-env
   POSTGRES_USER: ${POSTGRES_USER:-caching}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-caching}
@@ -3583,7 +3643,7 @@ services:
     image: postgres:16-alpine
     environment: *db-env
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -3660,18 +3720,6 @@ LOG_LEVEL=INFO
 
 To use a different file: `lets run --env FILE` (runs `docker compose --env-file FILE up --build`).
 
-### External database
-
-Add `POSTGRES_HOST` and `POSTGRES_PORT` (plus that database's credentials) to `.env`, then start only the
-migrations and the service, without the bundled postgres:
-
-```bash
-lets run-external            # docker compose up --build --no-deps migrations caching-service
-```
-
-Use a hostname the containers can reach, **never `localhost`** (inside a container that is the container
-itself). For a database running directly on your machine use `host.docker.internal`.
-
 ## API
 
 | Method | Path | Result |
@@ -3708,7 +3756,6 @@ The same commands via [lets](https://lets-cli.org/):
 | `lets test [-p PATH]` | pytest (default `tests/`) |
 | `lets lint` | `mypy` + `ruff` + `black` (each also runnable alone) |
 | `lets run [--env FILE]` / `lets stop` | `docker compose [--env-file FILE] up --build` / `docker compose down` |
-| `lets run-external [--env FILE]` | migrations + service only, against an external database |
 | `lets alembic-upgrade` | apply migrations to the DB set by `POSTGRES_*` |
 | `lets alembic-revision -m "..."` | autogenerate a migration |
 

@@ -134,3 +134,22 @@ def test_unwritable_output_exits_2_without_any_request(tmp_path: Path) -> None:
 
     assert run.code == 2
     assert run.requests == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["<html>not the caching service</html>", '{"unexpected": "shape"}'],
+    ids=["html_page", "wrong_json_shape"],
+)
+def test_success_status_with_a_non_payload_body_exits_1(body: str) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, text=body)
+
+    def factory(settings: CacheCliSettings) -> httpx2.Client:
+        return httpx2.Client(transport=httpx2.MockTransport(handler), base_url=str(settings.host))
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    code = main(["-j", SAMPLE_JSON], stdin=io.StringIO(), stdout=stdout, stderr=stderr, http_client_factory=factory)
+
+    assert code == 1
+    assert "request failed" in stderr.getvalue()

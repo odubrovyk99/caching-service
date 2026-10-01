@@ -65,7 +65,9 @@ def main(
             for line in run_iterations(client, request, settings.repeat):
                 sink.write(f"{line}\n")
                 sink.flush()
-        except httpx2.HTTPError as error:
+        # ValueError: a 2xx body that is not JSON (JSONDecodeError) or not a payload response (ValidationError),
+        # e.g. when --host points at a different service.
+        except (httpx2.HTTPError, ValueError) as error:
             print(f"{PROG_NAME}: request failed: {error}", file=stderr)
             return EXIT_REQUEST_FAILED
     return EXIT_OK

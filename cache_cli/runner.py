@@ -22,6 +22,7 @@ def run_iterations(client: httpx2.Client, request: PayloadCreateRequest, repeat:
 
     Raises:
         httpx2.HTTPError: On a connection failure or a non-2xx response.
+        ValueError: If a 2xx response body is not JSON or not the expected payload response.
     """
     body = request.model_dump()
     for iteration in range(1, repeat + 1):

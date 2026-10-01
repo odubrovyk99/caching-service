@@ -1,4 +1,5 @@
 import asyncio
+from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import pool
@@ -10,6 +11,9 @@ from caching_service.db.models import Base
 
 config = context.config
 target_metadata = Base.metadata
+
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def run_migrations_offline() -> None:
