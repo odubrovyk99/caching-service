@@ -18,6 +18,7 @@
 - Line length 120. `ruff check .`, `black --check .` and `mypy caching_service cache_cli migrations/env.py` must be clean at the end of every task. Code blocks in this plan are not guaranteed black-formatted, so run `uv run black . && uv run ruff check --fix .` before each lint check. mypy covers `migrations/env.py` only, because a revision file named `0001_….py` is not a valid module name for mypy.
 - f-strings only, except logging calls, which pass lazy `%s` arguments (`logger.info("… %s", value)`). Imports ordered stdlib → third-party → local. Module constants directly after imports.
 - **Docstrings:** full Google style on every production class, function and method: summary, blank line, `Args:` listing every parameter, `Returns:`/`Yields:` for non-`None` returns, `Raises:` where relevant. Never trim to a one-liner. Test functions carry no docstrings; their names say what they pin.
+- **Pydantic vs dataclass:** Pydantic only where validation or the HTTP/CLI boundary needs it (request/response models, settings). Internal values built by our own code are `@dataclass(frozen=True, slots=True)`.
 - SQLAlchemy: `DeclarativeBase` + `Mapped[...]` + `mapped_column()` only. Table names singular lowercase. Index names `idx_{table}__{field}`.
 - Exact strings from the spec: `"Payload created"`, `"Payload already exists"`, `"Payload not found"`, separator `", "`, `{"status": "ok"}`.
 - Limits: `MAX_LIST_LENGTH = 1000`, `MAX_STRING_LENGTH = 10_000`. These cap the batched transformation insert at 2 000 × 3 = 6 000 query arguments, far under asyncpg's 32 767.
@@ -373,8 +374,8 @@ git commit -m "feat: add payload hashing and interleave helpers"
 - Produces:
   - `PayloadCreateRequest(list_1: list[str], list_2: list[str])`: `extra="forbid"`, strict strings, 1..1000 items, ≤10 000 chars per item, no NUL / lone surrogates, equal lengths (error text contains `"same length"`).
   - `PayloadCreateResponse(id: UUID, message: str)`, `PayloadReadResponse(output: str)`.
-  - `PayloadCreationResult(payload_id: UUID, created: bool)` (frozen).
-  - `TransformationRecord(input_hash: str, input_value: str, output_value: str)` (frozen).
+  - `PayloadCreationResult(payload_id: UUID, created: bool)`: frozen dataclass.
+  - `TransformationRecord(input_hash: str, input_value: str, output_value: str)`: frozen dataclass.
   - `HealthResponse(status: str)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -466,6 +467,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'caching_service.schem
 `caching_service/schemas/payload.py`:
 
 ```python
+from dataclasses import dataclass
 from typing import Annotated, Self
 from uuid import UUID
 
@@ -474,11 +476,11 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictStr, mo
 from caching_service.constants import MAX_LIST_LENGTH, MAX_STRING_LENGTH
 
 
-def _ensure_storable(value: str) -> str:
-    """Reject strings that Postgres TEXT cannot store.
+def _reject_nul(value: str) -> str:
+    """Reject strings containing NUL, which Postgres TEXT cannot store.
 
-    Postgres rejects NUL characters, and lone surrogates cannot be encoded as UTF-8. Either would surface
-    as a 500 at insert time, so both are turned into validation errors here.
+    Without this a NUL would pass validation and surface as a 500 at insert time. Lone surrogates need no
+    check here: pydantic's ``str`` validation already rejects them (``string_unicode``).
 
     Args:
         value: A single list item.
@@ -487,18 +489,14 @@ def _ensure_storable(value: str) -> str:
         The unchanged value.
 
     Raises:
-        ValueError: If the value contains NUL or is not encodable as UTF-8.
+        ValueError: If the value contains a NUL character.
     """
     if "\x00" in value:
         raise ValueError("strings must not contain NUL characters")
-    try:
-        value.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise ValueError("strings must be valid UTF-8") from error
     return value
 
 
-PayloadItem = Annotated[StrictStr, Field(max_length=MAX_STRING_LENGTH), AfterValidator(_ensure_storable)]
+PayloadItem = Annotated[StrictStr, Field(max_length=MAX_STRING_LENGTH), AfterValidator(_reject_nul)]
 PayloadItems = Annotated[list[PayloadItem], Field(min_length=1, max_length=MAX_LIST_LENGTH)]
 
 
@@ -552,15 +550,17 @@ class PayloadReadResponse(BaseModel):
     output: str
 
 
-class PayloadCreationResult(BaseModel):
+@dataclass(frozen=True, slots=True)
+class PayloadCreationResult:
     """Outcome of storing a payload, before it is mapped to HTTP.
+
+    A dataclass, not a pydantic model: it is built only from values our own code produced, so there is
+    nothing to validate.
 
     Attributes:
         payload_id: Identifier of the created or reused payload.
         created: ``True`` if this call created the payload, ``False`` if it already existed.
     """
-
-    model_config = ConfigDict(frozen=True)
 
     payload_id: UUID
     created: bool
@@ -569,19 +569,21 @@ class PayloadCreationResult(BaseModel):
 `caching_service/schemas/transformation.py`:
 
 ```python
-from pydantic import BaseModel, ConfigDict
+from dataclasses import dataclass
 
 
-class TransformationRecord(BaseModel):
+@dataclass(frozen=True, slots=True)
+class TransformationRecord:
     """A transformer result ready to be cached.
+
+    A dataclass, not a pydantic model: the hash is ours and the output comes from our own transformer, so
+    there is nothing to validate, and it is built once per new string on the request path.
 
     Attributes:
         input_hash: ``sha256_hex(input_value)``.
         input_value: The original string.
         output_value: The transformer's result for ``input_value``.
     """
-
-    model_config = ConfigDict(frozen=True)
 
     input_hash: str
     input_value: str
@@ -607,7 +609,7 @@ class HealthResponse(BaseModel):
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/units/schemas -v`
-Expected: PASS (15 tests incl. parametrized)
+Expected: PASS (16 tests incl. parametrized)
 
 - [ ] **Step 5: Lint and commit (print for the user)**
 
@@ -1205,6 +1207,7 @@ Expected: the two new files FAIL with `ModuleNotFoundError: No module named 'cac
 
 ```python
 from collections.abc import Collection, Sequence
+from dataclasses import asdict
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -1252,7 +1255,7 @@ class TransformationRepository:
         """
         if not records:
             return
-        rows = [record.model_dump() for record in sorted(records, key=lambda record: record.input_hash)]
+        rows = [asdict(record) for record in sorted(records, key=lambda record: record.input_hash)]
         statement = (
             insert(TransformationModel)
             .values(rows)
