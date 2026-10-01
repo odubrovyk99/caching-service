@@ -918,9 +918,6 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 class Settings(BaseSettings):
     """Service configuration, read from environment variables.
 
-    The ``POSTGRES_*`` names match the official postgres image's own variables, so one env block can
-    configure both the database container and this service.
-
     Attributes:
         postgres_host: Database host.
         postgres_port: Database port.
@@ -940,8 +937,6 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> URL:
         """Build the asyncpg connection URL from the separate parts.
-
-        ``URL.create`` escapes each part, so a password containing ``@``, ``:`` or ``/`` stays intact.
 
         Returns:
             A ``postgresql+asyncpg`` SQLAlchemy URL.
@@ -3525,7 +3520,7 @@ git commit -m "feat: add cache-cli runner and console entry point"
 ### Task 11: Docker, compose and README
 
 **Files:**
-- Create: `Dockerfile`, `docker-compose.yml`, `README.md`
+- Create: `Dockerfile`, `docker-compose.yml`, `README.md`, `lets.yaml` (optional task runner: `test`, `lint`/`mypy`/`ruff`/`black`, `run`/`run-external`/`stop`, `alembic-upgrade`, `alembic-revision`)
 
 **Interfaces:**
 - Consumes: `caching_service.api.app:create_app` (uvicorn factory), `alembic.ini` + `migrations/`, env vars `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `LOG_LEVEL`. Public PyPI only, so the build needs no secrets.
@@ -3571,18 +3566,17 @@ CMD ["uvicorn", "caching_service.api.app:create_app", "--factory", "--host", "0.
 `docker-compose.yml`:
 
 ```yaml
-# Local development only: these credentials never leave the compose network.
-# The same POSTGRES_* names configure both the postgres image and the service.
+
 x-db-env: &db-env
-  POSTGRES_USER: caching
-  POSTGRES_PASSWORD: caching
-  POSTGRES_DB: caching
+  POSTGRES_USER: ${POSTGRES_USER:-caching}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-caching}
+  POSTGRES_DB: ${POSTGRES_DB:-caching}
 
 x-app-env: &app-env
   <<: *db-env
-  POSTGRES_HOST: postgres
-  POSTGRES_PORT: "5432"
-  LOG_LEVEL: INFO
+  POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
 services:
   postgres:
@@ -3593,7 +3587,7 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U caching -d caching"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 2s
       timeout: 3s
       retries: 15
@@ -3647,8 +3641,36 @@ docker compose up --build        # postgres → migrations → service on :8000
 curl localhost:8000/health
 ```
 
-Configuration (environment): `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` (required),
-`POSTGRES_HOST` (default `localhost`), `POSTGRES_PORT` (default `5432`), `LOG_LEVEL` (default `INFO`).
+## Configuration
+
+The service reads `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` (required), `POSTGRES_HOST`
+(default `localhost`), `POSTGRES_PORT` (default `5432`) and `LOG_LEVEL` (default `INFO`) from environment
+variables.
+
+Docker Compose can take them from an optional `.env` file next to `docker-compose.yml` (git-ignored);
+without it, it falls back to `caching`/`caching`/`caching`, `INFO`, and the bundled `postgres:5432`.
+Example `.env`:
+
+```dotenv
+POSTGRES_USER=caching
+POSTGRES_PASSWORD=caching
+POSTGRES_DB=caching
+LOG_LEVEL=INFO
+```
+
+To use a different file: `lets run --env FILE` (runs `docker compose --env-file FILE up --build`).
+
+### External database
+
+Add `POSTGRES_HOST` and `POSTGRES_PORT` (plus that database's credentials) to `.env`, then start only the
+migrations and the service, without the bundled postgres:
+
+```bash
+lets run-external            # docker compose up --build --no-deps migrations caching-service
+```
+
+Use a hostname the containers can reach, **never `localhost`** (inside a container that is the container
+itself). For a database running directly on your machine use `host.docker.internal`.
 
 ## API
 
@@ -3679,13 +3701,24 @@ uv run pytest                                            # unit + integration (i
 uv run ruff check . && uv run black --check . && uv run mypy caching_service cache_cli migrations/env.py
 ```
 
+The same commands via [lets](https://lets-cli.org/):
+
+| Command | Does |
+|---|---|
+| `lets test [-p PATH]` | pytest (default `tests/`) |
+| `lets lint` | `mypy` + `ruff` + `black` (each also runnable alone) |
+| `lets run [--env FILE]` / `lets stop` | `docker compose [--env-file FILE] up --build` / `docker compose down` |
+| `lets run-external [--env FILE]` | migrations + service only, against an external database |
+| `lets alembic-upgrade` | apply migrations to the DB set by `POSTGRES_*` |
+| `lets alembic-revision -m "..."` | autogenerate a migration |
+
 ## Shortcuts and assumptions
 
 - The transformer is `str.upper()` with no latency, behind the `TransformerClient` protocol.
 - Postgres is the only cache tier: no Redis, no in-process LRU, no expiry (uppercase is deterministic).
 - Two concurrent requests that first see the same string at the same moment may each call the
   transformer once. `ON CONFLICT DO NOTHING` keeps one row. No cross-request locking.
-- Empty lists, non-string items, NUL characters and lone surrogates are rejected with `422`.
+- Empty lists, non-string items, NUL characters and broken Unicode characters are rejected with `422`.
 - Limits: 1–1000 items per list, ≤ 10 000 characters per item.
 - Payload identity is order-sensitive. The input lists are not stored, only the output.
 ````
@@ -3708,7 +3741,7 @@ Run: `docker compose down`
 - [ ] **Step 6: Commit (print for the user)**
 
 ```bash
-git add Dockerfile docker-compose.yml README.md
+git add Dockerfile docker-compose.yml README.md lets.yaml
 git commit -m "build: add Dockerfile, compose stack and README"
 ```
 

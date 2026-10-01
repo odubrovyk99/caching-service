@@ -7,3 +7,4 @@
 htmlcov
 tests
 docs
+.env

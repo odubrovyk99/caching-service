@@ -1,0 +1,65 @@
+shell: bash
+
+commands:
+  ruff:
+    description: Run ruff linter
+    cmd: uv run ruff check .
+
+  mypy:
+    description: Run mypy type checks
+    cmd: uv run mypy caching_service cache_cli migrations/env.py
+
+  black:
+    description: Check formatting with black
+    cmd: uv run black --check .
+
+  lint:
+    description: Run all linters
+    depends:
+      - mypy
+      - ruff
+      - black
+
+  test:
+    description: Run tests with pytest (integration tests need Docker for testcontainers)
+    options: |
+      Usage:
+        lets test [--path=<path>]
+      Options:
+        --path=<path>, -p  Path to test files or directories (default: "tests/")
+    cmd: uv run pytest -vv "${LETSOPT_PATH:-tests/}"
+
+  run:
+    description: Build and start postgres, migrations and the service on :8000
+    options: |
+      Usage:
+        lets run [--env=<env>]
+      Options:
+        --env=<env>, -E  Env file with POSTGRES_* / LOG_LEVEL (default: ./.env if present)
+    cmd: docker compose ${LETSOPT_ENV:+--env-file "$LETSOPT_ENV"} up --build
+
+  run-external:
+    description: Start migrations and the service against an external database (no bundled postgres)
+    options: |
+      Usage:
+        lets run-external [--env=<env>]
+      Options:
+        --env=<env>, -E  Env file with POSTGRES_HOST / POSTGRES_PORT / credentials (default: ./.env if present)
+    cmd: docker compose ${LETSOPT_ENV:+--env-file "$LETSOPT_ENV"} up --build --no-deps migrations caching-service
+
+  stop:
+    description: Stop the compose stack (keeps the database volume)
+    cmd: docker compose down
+
+  alembic-upgrade:
+    description: Apply migrations to the database configured by POSTGRES_* env vars
+    cmd: uv run alembic upgrade head
+
+  alembic-revision:
+    description: Autogenerate a migration against the database configured by POSTGRES_* env vars
+    options: |
+      Usage:
+        lets alembic-revision --message=<message>
+      Options:
+        --message=<message>, -m  Migration message
+    cmd: uv run alembic revision --autogenerate -m "${LETSOPT_MESSAGE}"
