@@ -46,6 +46,13 @@ commands:
       - activate-venv
     cmd: uv run pytest -vv "${LETSOPT_PATH:-tests/}"
 
+  audit:
+    description: Check dependencies for known vulnerabilities with pip-audit
+    depends:
+      - activate-venv
+    # --skip-editable: the project itself is not on PyPI, so there is nothing to audit for it.
+    cmd: uv run pip-audit --skip-editable
+
   run:
     description: Build and start postgres, migrations and the service on :8000
     options: |

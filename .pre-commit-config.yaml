@@ -17,3 +17,11 @@ repos:
         pass_filenames: false
         always_run: true
         entry: lets test
+    -   id: audit
+        name: pip-audit
+        stages:
+        -    pre-push
+        language: system
+        pass_filenames: false
+        always_run: true
+        entry: lets audit

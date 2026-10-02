@@ -26,6 +26,7 @@ dev = [
     "ruff>=0.9",
     "black>=25.1",
     "pre-commit>=4.5.1",
+    "pip-audit>=2.9",
 ]
 
 [build-system]

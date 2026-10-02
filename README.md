@@ -72,8 +72,8 @@ lets lint                        # mypy + ruff + black
 uv run pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-Git hooks (`.pre-commit-config.yaml`): `lets lint` runs on every commit; `lets test` also runs before
-every push.
+Git hooks (`.pre-commit-config.yaml`): `lets lint` runs on every commit; `lets test` and `lets audit` also run
+before every push.
 
 | lets | Plain command |
 |---|---|
@@ -83,6 +83,7 @@ every push.
 | `lets mypy` | `uv run mypy caching_service cache_cli migrations/env.py` |
 | `lets ruff` | `uv run ruff check .` |
 | `lets black` | `uv run black --check .` |
+| `lets audit` | `uv run pip-audit --skip-editable` (known vulnerabilities in dependencies) |
 | `lets run [--env FILE]` | `docker compose [--env-file FILE] up --build` |
 | `lets stop` | `docker compose down` |
 | `lets alembic-upgrade` | `uv run alembic upgrade head` (DB from `POSTGRES_*` env vars) |
