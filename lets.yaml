@@ -1,16 +1,31 @@
 shell: bash
 
 commands:
+  activate-venv:
+    description: Activate the virtual environment
+    cmd: |
+      if [[ ! -d ".venv" ]]; then
+        echo "[ERROR] The virtual environment directory '.venv' does not exist." >&2
+      fi
+      source .venv/bin/activate
+      echo "Using virtual environment: $(which python)"
+
   ruff:
     description: Run ruff linter
+    depends:
+      - activate-venv
     cmd: uv run ruff check .
 
   mypy:
     description: Run mypy type checks
+    depends:
+      - activate-venv
     cmd: uv run mypy caching_service cache_cli migrations/env.py
 
   black:
     description: Check formatting with black
+    depends:
+      - activate-venv
     cmd: uv run black --check .
 
   lint:
@@ -27,6 +42,8 @@ commands:
         lets test [--path=<path>]
       Options:
         --path=<path>, -p  Path to test files or directories (default: "tests/")
+    depends:
+      - activate-venv
     cmd: uv run pytest -vv "${LETSOPT_PATH:-tests/}"
 
   run:
@@ -44,6 +61,8 @@ commands:
 
   alembic-upgrade:
     description: Apply migrations to the database configured by POSTGRES_* env vars
+    depends:
+      - activate-venv
     cmd: uv run alembic upgrade head
 
   alembic-revision:
@@ -53,4 +72,6 @@ commands:
         lets alembic-revision --message=<message>
       Options:
         --message=<message>, -m  Migration message
+    depends:
+      - activate-venv
     cmd: uv run alembic revision --autogenerate -m "${LETSOPT_MESSAGE}"

@@ -7,11 +7,20 @@ same payload id.
 
 Design: `docs/01-RFC.md` · Spec: `docs/02-spec.yaml` · Tests: `docs/03-test-checklist.md`
 
+## Requirements
+
+- Docker with Compose, to run the stack and the integration tests (testcontainers).
+- [uv](https://docs.astral.sh/uv/) for local development; it installs Python 3.12 from `.python-version`.
+- Optional: [lets](https://lets-cli.org/) task runner. Every task in `lets.yaml` wraps a plain `uv` or
+  `docker compose` command shown below, so lets is a shortcut, not a requirement.
+
 ## Run
 
 ```bash
-docker compose up --build        # postgres → migrations → service on :8000
+lets run                         # or: docker compose up --build
+                                 # postgres → migrations → service on :8000
 curl localhost:8000/health
+lets stop                        # or: docker compose down (keeps the database volume)
 ```
 
 ## Configuration
@@ -57,20 +66,27 @@ The CLI ignores environment variables.
 ## Develop
 
 ```bash
-uv sync
-uv run pytest                                            # unit + integration (integration needs Docker)
-uv run ruff check . && uv run black --check . && uv run mypy caching_service cache_cli migrations/env.py
+uv sync                          # create .venv with dev dependencies
+lets test                        # unit + integration (integration needs Docker)
+lets lint                        # mypy + ruff + black
+uv run pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-The same commands via [lets](https://lets-cli.org/):
+Git hooks (`.pre-commit-config.yaml`): `lets lint` runs on every commit; `lets test` also runs before
+every push.
 
-| Command | Does |
+| lets | Plain command |
 |---|---|
-| `lets test [-p PATH]` | pytest (default `tests/`) |
-| `lets lint` | `mypy` + `ruff` + `black` (each also runnable alone) |
-| `lets run [--env FILE]` / `lets stop` | `docker compose [--env-file FILE] up --build` / `docker compose down` |
-| `lets alembic-upgrade` | apply migrations to the DB set by `POSTGRES_*` |
-| `lets alembic-revision -m "..."` | autogenerate a migration |
+| `lets activate-venv` | `source .venv/bin/activate`; every `uv run` task below depends on it |
+| `lets test [-p PATH]` | `uv run pytest -vv PATH` (default `tests/`) |
+| `lets lint` | runs `lets mypy`, `lets ruff`, `lets black` |
+| `lets mypy` | `uv run mypy caching_service cache_cli migrations/env.py` |
+| `lets ruff` | `uv run ruff check .` |
+| `lets black` | `uv run black --check .` |
+| `lets run [--env FILE]` | `docker compose [--env-file FILE] up --build` |
+| `lets stop` | `docker compose down` |
+| `lets alembic-upgrade` | `uv run alembic upgrade head` (DB from `POSTGRES_*` env vars) |
+| `lets alembic-revision -m "..."` | `uv run alembic revision --autogenerate -m "..."` |
 
 ## Shortcuts and assumptions
 

@@ -1,0 +1,19 @@
+# See https://pre-commit.com for more information
+repos:
+-   repo: local
+    hooks:
+    -   id: lint
+        name: Lets lint!
+        language: system
+        pass_filenames: false
+        always_run: true
+        entry: lets lint
+    -   id: test
+        name: Lets test!
+        # Integration tests start Postgres in Docker, so run them before pushing, not on every commit.
+        stages:
+        -    pre-push
+        language: system
+        pass_filenames: false
+        always_run: true
+        entry: lets test
