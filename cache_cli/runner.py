@@ -1,9 +1,9 @@
-import json
 from collections.abc import Iterator
 from http import HTTPStatus
 
 import httpx2
 
+from cache_cli.schemas import IterationResult
 from caching_service.schemas.payload import PayloadCreateRequest, PayloadCreateResponse, PayloadReadResponse
 
 
@@ -18,7 +18,7 @@ def run_iterations(client: httpx2.Client, request: PayloadCreateRequest, repeat:
         repeat: Number of iterations (≥ 1).
 
     Yields:
-        A JSON object with ``iteration`` (1-based), ``id``, ``created`` and ``output``.
+        One ``IterationResult`` serialized as a JSON line.
 
     Raises:
         httpx2.HTTPError: On a connection failure or a non-2xx response.
@@ -34,12 +34,9 @@ def run_iterations(client: httpx2.Client, request: PayloadCreateRequest, repeat:
         read_response.raise_for_status()
         payload = PayloadReadResponse.model_validate(read_response.json())
 
-        yield json.dumps(
-            {
-                "iteration": iteration,
-                "id": str(created.id),
-                "created": create_response.status_code == HTTPStatus.CREATED,
-                "output": payload.output,
-            },
-            ensure_ascii=False,
-        )
+        yield IterationResult(
+            iteration=iteration,
+            id=created.id,
+            created=create_response.status_code == HTTPStatus.CREATED,
+            output=payload.output,
+        ).model_dump_json()
