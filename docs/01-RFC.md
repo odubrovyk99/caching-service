@@ -242,23 +242,16 @@ Full schemas are in `02-spec.yaml`.
 
 ## 🔄 Alternatives Considered
 
-1. **Redis as the cache.** Rejected. The brief requires DB storage, so Redis would be a second store and
-   a second source of truth with no reduction in transformer calls.
-2. **In-process LRU (`cachetools` / `lru_cache`) in front of Postgres.** Rejected for now. Each replica
-   has its own cache and loses it on restart. It saves a DB round-trip, not a transformer call, which is
-   the metric the brief cares about. It is easy to add later behind `TransformationService`.
-3. **Response-cache libraries (`fastapi-cache`, `aiocache`).** Rejected. They cache HTTP responses, which
-   is the wrong layer: two different payloads sharing a string would still both call the transformer.
-4. **Unique index on raw `input_value`.** Rejected because of the btree entry size limit (about 2.7 KB),
+1. **Unique index on raw `input_value`.** Rejected because of the btree entry size limit (about 2.7 KB),
    which would fail inserts of long strings. sha256 gives a fixed-width key.
-5. **Deterministic id = payload hash (no UUID).** Rejected. It exposes a content hash as the public id,
+2. **Deterministic id = payload hash (no UUID).** Rejected. It exposes a content hash as the public id,
    which lets anyone check whether a given input exists. A UUID with a unique `input_hash` gives the same
    reuse guarantee.
-6. **Advisory lock / single-flight on misses.** Rejected. It adds complexity and latency to every miss to
-   save one call in a rare race (see Risks).
-7. **SQLModel.** Rejected in favour of SQLAlchemy 2.0 declarative
-   (`DeclarativeBase`, `Mapped`, `mapped_column`).
-8. **One transformer call per string, run concurrently with `asyncio.gather`.** Not needed for an
+3. **Auto-increment integer as the payload id.** Rejected. Sequential ids are guessable: anyone can walk
+   `/payload/1`, `/payload/2`, … and read every payload.
+   A random UUID cannot be enumerated. The cost, 16 bytes and a less compact index than an integer,
+   is irrelevant at this scale. The internal `transformation` table never leaves the service, so it keeps a plain auto-increment key.
+4. **One transformer call per string, run concurrently with `asyncio.gather`.** Not needed for an
    in-memory uppercase. `TransformationService` calls misses one after another. If a real HTTP transformer
    replaces it, bounded concurrency is a contained change.
 

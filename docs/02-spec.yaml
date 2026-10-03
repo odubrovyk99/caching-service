@@ -280,6 +280,10 @@ api_contracts:
       "404": {type: object, properties: {detail: {const: "Payload not found"}}}
       "422": {description: "id is not a UUID"}
   - method: GET
+    path: /metrics
+    response_schema:
+      "200": {description: "Prometheus text format, including the counter transformer_calls_total (calls made to the transformer)"}
+  - method: GET
     path: /health
     response_schema:
       "200": {type: object, properties: {status: {const: "ok"}}}

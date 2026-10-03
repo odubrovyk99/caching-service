@@ -1,6 +1,7 @@
 from collections.abc import Iterable
 
 from caching_service.clients.transformer_client import TransformerClient
+from caching_service.core.metrics import TRANSFORMER_CALLS
 from caching_service.db.repositories.transformation_repository import TransformationRepository
 from caching_service.schemas.transformation import TransformationRecord
 from caching_service.utils.hashing import sha256_hex
@@ -41,6 +42,7 @@ class TransformationService:
             # `is None`, not falsiness: a cached empty string is a hit.
             output = cached_outputs.get(input_hash)
             if output is None:
+                TRANSFORMER_CALLS.inc()
                 output = await self._transformer.transform(value)
                 new_records.append(TransformationRecord(input_hash=input_hash, input_value=value, output_value=output))
             outputs[value] = output

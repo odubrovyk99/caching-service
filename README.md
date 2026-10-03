@@ -49,6 +49,7 @@ To use a different file: `lets run --env FILE` (runs `docker compose --env-file 
 | `POST` | `/payload` `{"list_1": [...], "list_2": [...]}` | `201 {"id", "message": "Payload created"}`, or `200 {"id", "message": "Payload already exists"}` |
 | `GET` | `/payload/{id}` | `200 {"output": "..."}`, `404`, `422` |
 | `GET` | `/health` | `200 {"status": "ok"}` |
+| `GET` | `/metrics` | Prometheus text format; `transformer_calls_total` counts calls to the transformer |
 
 ## CLI
 
@@ -91,6 +92,10 @@ before every push.
 
 ## Shortcuts and assumptions
 
+- Only the stack the brief names: FastAPI, SQLAlchemy, PostgreSQL, Docker and Pydantic Settings. The one
+  addition is `prometheus-client`, for the transformer-call metric.
+- `transformer_calls_total` is per process and resets on restart; with several workers or replicas,
+  Prometheus sums them.
 - The transformer is `str.upper()` with no latency, behind the `TransformerClient` protocol.
 - Postgres is the only cache tier: no Redis, no in-process LRU, no expiry (uppercase is deterministic).
 - Two concurrent requests that first see the same string at the same moment may each call the

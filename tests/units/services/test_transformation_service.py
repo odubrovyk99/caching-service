@@ -1,3 +1,5 @@
+from prometheus_client import REGISTRY
+
 from caching_service.schemas.transformation import TransformationRecord
 from caching_service.services.transformation_service import TransformationService
 from caching_service.utils.hashing import sha256_hex
@@ -53,3 +55,17 @@ async def test_only_misses_are_saved_with_their_hashes() -> None:
     await service.transform_all(["a", "x"])
 
     assert repository.saved == [TransformationRecord(input_hash=sha256_hex("x"), input_value="x", output_value="X")]
+
+
+def _transformer_calls_metric() -> float:
+    return REGISTRY.get_sample_value("transformer_calls_total") or 0.0
+
+
+async def test_every_transformer_call_increments_the_metric() -> None:
+    repository = InMemoryTransformationRepository({sha256_hex("a"): "A"})
+    service = TransformationService(repository, CountingTransformerClient())
+    before = _transformer_calls_metric()
+
+    await service.transform_all(["a", "x", "y", "x"])
+
+    assert _transformer_calls_metric() - before == 2
