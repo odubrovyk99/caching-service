@@ -44,6 +44,18 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "--import-mode=importlib"
 
+[tool.coverage.run]
+source = ["caching_service", "cache_cli"]
+branch = true
+# SQLAlchemy's async layer runs DB calls in greenlets. Without greenlet tracing, every line after an awaited
+# DB call (e.g. route bodies) is reported as missed even though tests execute it.
+concurrency = ["thread", "greenlet"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 90
+
 [tool.black]
 line-length = 120
 target-version = ["py312"]

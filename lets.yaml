@@ -36,7 +36,7 @@ commands:
       - black
 
   test:
-    description: Run tests with pytest (integration tests need Docker for testcontainers)
+    description: Run tests with coverage (integration tests need Docker for testcontainers)
     options: |
       Usage:
         lets test [--path=<path>]
@@ -44,7 +44,8 @@ commands:
         --path=<path>, -p  Path to test files or directories (default: "tests/")
     depends:
       - activate-venv
-    cmd: uv run pytest -vv "${LETSOPT_PATH:-tests/}"
+    # The 90% threshold (pyproject.toml) applies to full runs only; a run limited by --path skips it.
+    cmd: uv run pytest -vv --cov --cov-report=term ${LETSOPT_PATH:+--cov-fail-under=0} "${LETSOPT_PATH:-tests/}"
 
   audit:
     description: Check dependencies for known vulnerabilities with pip-audit

@@ -68,18 +68,18 @@ The CLI ignores environment variables.
 
 ```bash
 uv sync                          # create .venv with dev dependencies
-lets test                        # unit + integration (integration needs Docker)
+lets test                        # unit + integration with coverage (integration needs Docker)
 lets lint                        # mypy + ruff + black
 uv run pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-Git hooks (`.pre-commit-config.yaml`): `lets lint` runs on every commit; `lets test` and `lets audit` also run
-before every push.
+Git hooks (`.pre-commit-config.yaml`): `lets lint` runs on every commit; `lets test` (with the coverage
+threshold) and `lets audit` also run before every push.
 
 | lets | Plain command |
 |---|---|
 | `lets activate-venv` | `source .venv/bin/activate`; every `uv run` task below depends on it |
-| `lets test [-p PATH]` | `uv run pytest -vv PATH` (default `tests/`) |
+| `lets test [-p PATH]` | `uv run pytest -vv --cov --cov-report=term PATH` (default `tests/`); a full run fails under 90% coverage |
 | `lets lint` | runs `lets mypy`, `lets ruff`, `lets black` |
 | `lets mypy` | `uv run mypy caching_service cache_cli migrations/env.py` |
 | `lets ruff` | `uv run ruff check .` |
